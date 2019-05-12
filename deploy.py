@@ -1,5 +1,6 @@
 import boto3
-import datetime
+from botocore.exceptions import ClientError
+import time
 
 
 def main():
@@ -68,14 +69,48 @@ def certificate_manager(region, hosted_zone, domain_name):
         SubjectAlternativeNames=[
             '*.{}'.format(domain_name),
         ],
-        IdempotencyToken=str(datetime.timestamp())
+        IdempotencyToken=str(int(time.time()))
     )
 
     cloudformation(region, hosted_zone['Id'], certificate, domain_name)
 
 
 def cloudformation(region, hosted_zone_id, certificate_arn, domain_name):
-    pass
+    client = boto3.client('s3', region_name=region)
+    while True:
+        try:
+            client.get_bucket_policy(Bucket=domain_name)
+            break
+        except ClientError as e:
+            if e.response['Error']['Code'] == 'NoSuchBucketPolicy':
+                input('Conflicting bucket. Delete "{}" S3 bucket and press enter once done'.format(domain_name))
 
+    with open('./template.json', 'r') as file:
+        data = file.read().replace('\n', '')
+
+    print(client.create_stack(
+        StackName=domain_name,
+        TemplateBody=data,
+        Parameters=[
+            {
+                'ParameterKey': 'HostedZoneID',
+                'ParameterValue': hosted_zone_id
+            },
+            {
+                'ParameterKey': 'ACMCertificateARN',
+                'ParameterValue': certificate_arn
+            },
+            {
+                'ParameterKey': 'WebsiteURL',
+                'ParameterValue': domain_name
+            }
+        ],
+        DisableRollback=False,
+        TimeoutInMinutes=60,
+        Capabilities=[
+            'CAPABILITY_IAM',
+        ],
+        OnFailure='ROLLBACK'
+    ))
 
 main()
